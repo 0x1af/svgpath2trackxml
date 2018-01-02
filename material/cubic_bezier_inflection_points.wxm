@@ -1,0 +1,57 @@
+/* [wxMaxima batch file version 1] [ DO NOT EDIT BY HAND! ]*/
+/* [ Created with wxMaxima version 13.04.2 ] */
+
+/* [wxMaxima: input   start ] */
+load(bernstein);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+Bx: sum(bernstein_poly(i,3,t)*x[i], i , 0, 3);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+By: sum(bernstein_poly(i,3,t)*y[i], i , 0, 3);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+dBx: facsum(diff(Bx,t), t^2, t);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+dBx: dBx,(x[3]−3*x[2]+3*x[1]−x[0])=u, (x[2]−2*x[1]+x[0])=v, (x[1]−x[0])=w ;
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+dBy:  facsum(diff(By,t), t^2, t);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+dBy: dBy, (y[3]−3*y[2]+3*y[1]−y[0])=m, (y[2]−2*y[1]+y[0])=n, (y[1]−y[0])=o;
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+ddBy: facsum(diff(dBy,t), t^2, t);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+ddBx: facsum(diff(dBx,t), t^2, t);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+Curv: facsum(expand(dBx * ddBy - ddBx * dBy), t^3, t^2, t);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+Curv: subst([(n*w−o*v)=z, (m*w−o*u)=y, (m*v−n*u)=x], Curv);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+res: solve(Curv=0,t);
+/* [wxMaxima: input   end   ] */
+
+/* [wxMaxima: input   start ] */
+fortran(res);
+/* [wxMaxima: input   end   ] */
+
+/* Maxima can't load/batch files which end with a comment! */
+"Created with wxMaxima"$
