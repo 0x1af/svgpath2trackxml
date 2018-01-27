@@ -6,9 +6,14 @@ import matplotlib.patches as patches
 from scipy.optimize import minimize
 import numpy as np
 import pdb
+import torcs_trackxml
+from track_segment import Turn
+from timeit import default_timer as timer
 
+
+   
 def complex2tuple(val):
-	return (val.real, val.imag)
+	return (-val.real, val.imag)
 
 def convert_closed_path(svg_path):
 	verts = [complex2tuple(svg_path[0].start)]
@@ -72,90 +77,86 @@ def angle_between(v1, v2):
     v2_u = unit_vector(v2)
     return np.arccos(np.clip(np.dot(v1_u, v2_u), -1.0, 1.0))
 
-class Turn():
-	def __init__(self, turn_type, start, end, arc, verts, profil_steps):
-		self.turn_type = turn_type
-		self.start = start
-		self.end = end
-		self.arc = arc
-		self.verts = verts
-		self.profil_steps = profil_steps
 
-def calc_turn(start, vec, arc, r1, r2, turn_type, **kwargs):
+
+def calc_turn(start, heading, arc, r1, r2, turn_type, **kwargs):
 	
-	verts = []
+	
 	if r1 < 0.0 or r2 < 0.0:
 		print("Warning: negative value(s) for radius r1 or r2") #TODO: raise exception
-		return [start]
-	# steps:
-	total_length = (r1+r2)/2.0*arc # only approx. if r1 != r2
+		return  Turn(turn_type, start, start, arc, verts, N)
+
+	dtype = kwargs.get('dtype', np.float64)
+	# convert all input to desired dtype
+	start = np.array(start, dtype=dtype)
+	heading = dtype(heading)
+	arc = dtype(arc)
+	r1 = dtype(r1)
+	r2 = dtype(r2)
+
+	
+
+	# required number of steps
+	total_length = (r1+r2)/dtype(2.0)*arc # only approx. if r1 != r2
 	N = 0
 	if 'profil_step_length' in kwargs:
 		N = int(total_length / kwargs.get('profil_step_length')) +1# number of steps
 	else:
 		N = kwargs.get('profil_steps')
-	#print(N)
-	#print(N)
+
+	# radius change per step
 	dRad = r2-r1	
 	if N != 1:
-		dRad = (r2-r1)/(N-1)
-	dArcLength = total_length / N;
+		dRad = dtype( (r2-r1)/(N-1) )
+
+	dArcLength = dtype(total_length / N);
+	
 	if r1 != r2 and N != 1:
 		# compensate for radius change
-		dRad = (r2-r1)/(N-1) # TODO: N-1 seems a bit strange, keep an eye on it
-		tmpAngle = 0.0
+		#dRad = (r2-r1)/(N-1) # TODO: N-1 seems a bit strange, keep an eye on it
+		tmpAngle = dtype(0.0)
 		tmpRadius = r1
 		for n in range(N):
 			tmpAngle += dArcLength / tmpRadius
 			tmpRadius += dRad
 		dArcLength = dArcLength * arc / tmpAngle # correct average length per step
-	heading = np.arctan2(vec[1], vec[0])
-	
-	
-	sign = 1
-	if turn_type == 'lft':
-		sign = -1
-	ang_normal = heading - sign*np.pi/2.0
-	newx, newy = start
 
+	
+	
+	sign = dtype(1)
+	if turn_type == 'lft':
+		sign = dtype(-1)
+
+
+	ang_normal = heading - dtype(sign*np.pi/2.0)
+	newx, newy = start
+	verts = []
 	for n in range(0,N):
-		seg_radius = r1+n*dRad
+		seg_radius = r1+dtype(n*dRad)
 		seg_arc = dArcLength / seg_radius
 		
 		ceny = newy + seg_radius * np.sin(ang_normal)
 		cenx =  newx + seg_radius * np.cos(ang_normal)
-		#print([seg_radius, seg_arc, cenx, ceny, ang_normal])
-		heading -= sign*seg_arc
 		ang_normal -= sign*seg_arc
 		newx = cenx - seg_radius * np.cos(ang_normal)
 		newy = ceny - seg_radius * np.sin(ang_normal)
 		if kwargs.get('all_verts', False):
 			verts.append([newx, newy])
-		#print(seg_radius)
-	
+	if dtype is np.float32:
+		print(isinstance(dArcLength, np.float32))
+		print(isinstance(ang_normal, np.float32))
+		print(isinstance(total_length, np.float32))
+		#pdb.set_trace()
+		
 	return Turn(turn_type, start, [newx, newy], arc, verts, N)
 
 def err_dist(r, start, end_target, vec, arc, profil_step_length, turn_type):
 	end_p = calc_turn_end(start, vec, arc, r[0], r[1], profil_step_length, turn_type, False)
 	return np.linalg.norm(np.array(end_target)-np.array(end_p[0]))
 
-def err_dist_jac(r, start, end_target, vec, arc, profil_step_length, turn_type):
-	end_p0 = calc_turn_end(start, vec, arc, r[0]+2, r[1], profil_step_length, turn_type, False)
-	end_p1 = calc_turn_end(start, vec, arc, r[0], r[1]+2, profil_step_length, turn_type, False)
-	err_dist0 =  np.linalg.norm(np.array(end_target)-np.array(end_p0[0]))
-	err_dist1 =  np.linalg.norm(np.array(end_target)-np.array(end_p1[0]))
-	return np.array([err_dist0, err_dist1])
-
-def neg_segment_curvature(x,segment):
-	x = np.clip(x, 0.0, 1.0)
-	print(x)
-	return -segment.curvature(x[0])
-def neg_segment_jacobian(x, segment):
-	return -segment.derivative(x[0], n=1)
-
 
 def cubic_bezier_inflections(cb):
-	# taken from: https://pomax.github.io/bezierinfo/#inflections
+	# see the wx-maxima sheet in material for details
 	x0,y0 = complex2tuple(cb.start)
 	x1,y1 = complex2tuple(cb.control1)
 	x2,y2 = complex2tuple(cb.control2)
@@ -173,66 +174,13 @@ def cubic_bezier_inflections(cb):
 		return []
 	t1 = -(np.sqrt(y**2-4*x*z)+y)/x/2.0E+0
 	t2 = (np.sqrt(y**2-4*x*z)-y)/x/2.0E+0
-	print([t1,t2])
-	#t1 = -y + np.sqrt((y**2 - 4*x*z) / (2*x))
-	#t2 = -y - np.sqrt((y**2 - 4*x*z) / (2*x))
 	res = []
 	if t1 >= 0.0 and t1 <= 1.0:
 		res.append(t1)
 	if t2 >= 0.0 and t2 <= 1.0:
 		res.append(t2)
-	print("Result:"+str(res))
-	# align cubic bezier
-	'''	rot_ang = np.arctan2(end[1], end[0])
-	sin = np.sin(rot_ang)
-	cos = np.cos(rot_ang)
-	R = np.array([[cos, sin],[-sin, cos]])
-	c1 = R.dot(c1)
-	c2 = R.dot(c2)
-	end = R.dot(end)
-	pdb.set_trace()
-	verts = [start, c1, c2, end]
-	codes = [Path.MOVETO] + [Path.CURVE4]*3
-	path = Path(verts, codes)
-	patch = patches.PathPatch(path, facecolor='none', lw=1)
-	fig = plt.figure()
-	plt.gca().invert_yaxis()
-	ax = fig.add_subplot(111)
-	ax.add_patch(patch)
-
-	ax.autoscale(enable=True, axis='both', tight=None)
-	plt.axis('equal')
-	plt.show()
-	#pdb.set_trace()
-	x2,y2 = (c1[0],c1[1])
-	x3,y3 = (c2[0],c2[1])
-	x4,y4 = (end[0],end[1])
-	#print([cb.control1, cb.control2, cb.end])
-	a = x3 * y2
-	b = x4 * y2
-	c = x2 * y3
-	d = x4 * y3 
-	x = 18*(-3*a + 2*b + 3*c - d)
-	y = 18*(3*a - b - 3*c)
-	z = 18*(c - a)
-	#pdb.set_trace()
-	print([x, y,z])
-	if x == 0 and y != 0:
-		print("Warn x == 0 and y != 0")
-		return [-y]
-	if (y**2 - 4*x*z) / (2*x) < 0.0:
-		print("val < 0.0")
-		return []
-	t1 = -y + np.sqrt((y**2 - 4*x*z) / (2*x))
-	t2 = -y - np.sqrt((y**2 - 4*x*z) / (2*x))
-	print([t1,t2])
-	res = []
-	if t1 >= 0.0 and t1 <= 1.0:
-		res.append(t1)
-	if t2 >= 0.0 and t2 <= 1.0:
-		res.append(t2)
-	print("Result:"+str(res))'''
 	return res
+
 def draw_turn_to_figure(turn, fig, **kwargs):
 	verts = [turn.start] + turn.verts
 	codes = [Path.MOVETO]+[Path.LINETO]*(len(verts)-1)
@@ -251,11 +199,10 @@ class MinimizerResult():
 		self.result = res
 
 def custom_minimize(r, fig, **kwargs):
-	#args=(start,end, vec, arc, profil_step_length, turn_type), options={'xtol': 1e-8, 'disp': True}):
-	start, end_target, vec, arc, profil_step_length, turn_type = kwargs["args"]
-	end_target = np.array(end_target)
+	start, end_target, heading, arc, profil_step_length, turn_type = kwargs["args"]
+	end_target = np.array(end_target, dtype=np.float32)
 	
-	err_dist = 1e12 # dummy value
+	err_dist = 1e12 # high start value
 	r_new = r
 	r_prev = r
 	min_iter = 0
@@ -268,21 +215,21 @@ def custom_minimize(r, fig, **kwargs):
 	ftol = 1e-10
 	while (n_iter < min_iter or err_dist > ftol) and n_iter < max_iter:
 
-		turn = calc_turn(start, vec, arc, r_new[0], r_new[1], turn_type,
+		turn = calc_turn(start, heading, arc, r_new[0], r_new[1], turn_type,
 			all_verts=True, **turn_opts)
  		
 		end_p = np.array(turn.end)
 		err_dist_prev = err_dist
 		err_dist = np.linalg.norm(end_target-end_p)
-		
+		# for debugging:
 		#draw_turn_to_figure(turn, fig)
 		####################
 		adjust_try = err_dist *adjust_try_factor + np.array(r_new) * min(err_dist,0.1)
 		# 
-		turn0 = calc_turn(start, vec, arc, r_new[0]+adjust_try[0], r_new[1],
+		turn0 = calc_turn(start, heading, arc, r_new[0]+adjust_try[0], r_new[1],
 			turn_type, all_verts = False, **turn_opts) # other option: profil_steps = turn.profil_steps) #
 		
-		turn1 = calc_turn(start, vec, arc, r_new[0], r_new[1]+adjust_try[1],
+		turn1 = calc_turn(start, heading, arc, r_new[0], r_new[1]+adjust_try[1],
 			turn_type, all_verts = False, **turn_opts) # other option: profil_steps = turn.profil_steps) #
 
 		end_p0 = np.array(turn0.end)
@@ -311,25 +258,15 @@ def custom_minimize(r, fig, **kwargs):
 			adjust_try_factor[0] *=2
 			#pdb.set_trace()
 		if r_new[0] < 0.0 or r_new[1] < 0.0:
-			# if we attempt to use a neg. radius, try opposite turn type 
-			#if turn_type == 'rgt':
-			#	turn_type = 'lft'
-			#else:
-			#	turn_type = 'rgt'
-			#print("Switching turn type to '%s'"%(turn_type))
 			print("Attempting to use neg radius :(")
 			if r_new[0] < 0.0:
-				r_new[0] = profil_step_length #1.0 #0.9*r_prev[0]
-				#adjust_try_factor[0] *=-1
-				#r_new[1] = 0.9*r_new[1]
+				r_new[0] = profil_step_length
 			if r_new[1] < 0.0:
-				#adjust_try_factor[1] *=-1
-				#r_new = r_prev
-				r_new[1] = profil_step_length # 0.9*r_prev[1]
+				r_new[1] = profil_step_length
 		if err_dist_prev < err_dist and 'profil_step_length' in turn_opts:
 			# not converging
-			# clamp the number of steps, otherwise minimizer might oscillate between 2 solutions
-			# if the number of steps changes between 2 optimisation steps
+			# clamp the number of steps, otherwise minimizer might oscillate between 2 solutions 
+			# ... if the number of steps changes between 2 optimisation steps
 			min_iter = n_iter + 10
 			turn_opts.pop('profil_step_length')
 			turn_opts['profil_steps'] = turn.profil_steps
@@ -337,84 +274,57 @@ def custom_minimize(r, fig, **kwargs):
 			# remove the clamping for the number of steps again
 			turn_opts.pop('profil_steps')
 			turn_opts['profil_step_length'] = profil_step_length
-		'''if np.allclose(r_new, r_prev, atol=profil_step_length/4) and 'profil_step_length' in turn_opts:
-			# clamp the number of steps, otherwise minimizer might oscillate between 2 solutions
-			# if the number of steps changes between 2 optimisation steps
-			print("Clamp profil steps")
-			turn_opts.pop('profil_step_length')
-			turn_opts['profil_steps'] = turn.profil_steps
-				#r_new[0] = 0.9*r_new[0]
-			# restart with positive radius
-			#chord = np.linalg.norm(np.array(end_target)-np.array(start))
-			#r_new[0] = r_new[1] = chord / (2.0* np.sin(arc/2.0))'''
-		#if  np.allclose(end_target[0], 361.19357715):
-		#	pdb.set_trace()
 		n_iter +=1
 		print("Err dist: "+str(err_dist)+" Radius: "+str(r_new))
 		#pdb.set_trace()
 	if 'profil_steps' in turn_opts:
 		print("n_iter ="+str(n_iter)+" max_iter ="+str(max_iter))
 		print("number of steps clamped to "+str(turn_opts['profil_steps']))
-	success = err_dist < ftol
-	
-		
-	return MinimizerResult(success, n_iter, err_dist, turn)
 
-def angle_unwrap_2pi(ang):
-	while ang < 0:
-		ang += 2*np.pi
-	return ang
+	success = err_dist < ftol
+	turn.set_radius(*r_new)	
+	return MinimizerResult(success, n_iter, err_dist, turn)
 		
-def cubic_bezier_segment_to_turn(segment, t1, t2, verts, codes, fig):
-	uv1 = complex2tuple(segment.unit_tangent(t2))
-	uv0 = complex2tuple(segment.unit_tangent(t1))
+def cubic_bezier_segment_to_turn(segment, t1, t2, fig):
+	uv0 = np.array(complex2tuple(segment.unit_tangent(t1)), dtype=np.float32)
+	uv1 = np.array(complex2tuple(segment.unit_tangent(t2)), dtype=np.float32)
 	arc = angle_between(uv0, uv1)
 	
-	uv1_ang = angle_unwrap_2pi(np.arctan2(uv1[1], uv1[0]))
-	uv0_ang = angle_unwrap_2pi(np.arctan2(uv0[1], uv0[0]))
-	print("Start/end tangents: "+str([uv0_ang/np.pi*180.0, uv1_ang/np.pi*180.0 ]))
-	# cw or ccw:
+	# figure out whether turn is left or right, cw or ccw:
 	turn_dir = uv0[0] * uv1[1] - uv0[1] * uv1[0]
 	turn_type = 'rgt'
 	if turn_dir > 0.0:
 		turn_type = 'lft'
+
 	print("-> Turn type: %s"%(turn_type))
 	start = complex2tuple(segment.point(t1))
 	end = complex2tuple(segment.point(t2))
-	vec = uv0
-	# initial guess:
-	# assume r1 and r2 are equal, use the formula for a 'chord of a circle' 
+
+	heading = np.arctan2(uv0[1], uv0[0])
+	# initial guess: assume r1 and r2 are equal, use the formula for a 'chord of a circle' 
 	chord = np.linalg.norm(np.array(end)-np.array(start))
 	r1 = r2 = chord / (2.0* np.sin(arc/2.0))
+
+	# default profile step length:
 	profil_step_length = 4.0
+
+	# alternative option: use the scipy minimizer
 	#res = minimize(err_dist, [r1,r2], args=(start,end, vec, arc, profil_step_length, turn_type), method='Newton-CG', options={'xtol': 1e-8, 'disp': False, 'maxiter':10000, 'fatol':1e-10, 'xatol':1e-10}, tol=1e-10, jac=err_dist_jac)
 	#turn_verts = calc_turn_end(start, vec, arc, res.x[0], res.x[1], profil_step_length, turn_type, True)
-	res = custom_minimize([r1,r2], fig, args=(start,end, vec, arc, profil_step_length, turn_type))
-	#print(r_new)
-	if not res.success:
-		print("NO SOLUTION")
-		draw_turn_to_figure(res.result, fig, color='red')
-	else:
-		draw_turn_to_figure(res.result, fig, color='green')
+	res = custom_minimize([r1,r2], fig, args=(start,end, heading, arc, profil_step_length, turn_type))
+
 	return res	
 	
 
 def fit_torcs_segments(svg_path, fig):
-	verts = []
-	codes = []
+	segments = []
 	n_iter = []
-	for n,segment in enumerate(svg_path):
-		if n < 1 or n > 2:
-			#continue
-			pass
+	for segment in svg_path:
 		if type(segment) is svgpathtools.CubicBezier:
-			#max_curvature = minimize(neg_segment_curvature, [0.5], args=(segment,), method='L-BFGS-B', options={'xtol': 1e-5, 'disp': True}, bounds=((0,1.0),))
-			#print(max_curvature.x[0])
-			#t_end = 0.6#max_curvature.x[0]
 			profil_step_length = 4.0
 			t_vals = [0.0] + cubic_bezier_inflections(segment) +[1.0]
 			i = 0
-			n_insert_inbetween = 0 # number of new
+			n_insert_inbetween = 1 # number of new
 			while i < len(t_vals)-1:
 				t_start = t_vals[i]
 				t_end = t_vals[i+1]
@@ -441,22 +351,70 @@ def fit_torcs_segments(svg_path, fig):
 			for i in range(len(t_vals)-1):
 				t_start = t_vals[i]
 				t_end = t_vals[i+1]
-				ax = fig.gca()
+				#ax = fig.gca()
 				end_p = complex2tuple(segment.point(t_end))
-				ax.plot(end_p[0], end_p[1], 'x')
-				res = cubic_bezier_segment_to_turn(segment, t_start, t_end, verts, codes, fig)
+				#ax.plot(end_p[0], end_p[1], 'x')
+				res = cubic_bezier_segment_to_turn(segment, t_start, t_end, fig)
+				color = 'green'
+				if not res.success:
+					color = 'red'
+				#draw_turn_to_figure(res.result, fig, color=color )
 				n_iter.append(res.n_iter)
+				segments.append(res.result)
 	print(np.mean(n_iter))
-	#print(len(verts))
-	#print(len(codes))
-	return #Path(verts, codes)
+	return segments
 
+def fix_closing_for_float32(segments):
+	fixed_segments = []
+	profil_step_length = 4.0
+	last_turn = None
+	last_turn_index = None
+	last_turn_target_end =   np.array((0,0), dtype=np.float32)
+	for i, segment in enumerate(reversed(segments)):
+		if not segment.type == 'str':
+			last_turn = segment
+			last_turn_index = len(segments)-1-i
+			break
+		else:
+			last_turn_target_end[0] -= segment.len
+	# calculate last turn start position with float32 precision
+	pos = np.array((0,0), dtype=np.float32)
+	heading =np.float32(0.0)
+	for i, segment in  enumerate(segments):
+		if i == last_turn_index:
+			break
+		turn = calc_turn(pos, heading, segment.arc, segment.radius, segment.end_radius, segment.type, profil_steps=segment.profil_steps, dtype=np.float32)
+		pos = turn.end
+		print(turn.end)
+		print( np.array(turn.end, dtype=np.float32))
+		if turn.type == 'lft':
+			heading += np.float32(turn.arc)
+		else:
+			heading -= np.float32(turn.arc)
 
-paths, attributes = svgpathtools.svg2paths('track_layout.svg')
+	old_last_turn = calc_turn(pos, heading, last_turn.arc, last_turn.radius, last_turn.end_radius, last_turn.type, profil_steps=last_turn.profil_steps, dtype=np.float32)
+	print("float32 drift: "+str(np.linalg.norm(np.array(old_last_turn.end)-np.array(last_turn.end))))
+	print(pos)
+	pdb.set_trace()
+	res = custom_minimize([last_turn.radius, last_turn.end_radius], None, args=(pos, last_turn_target_end, heading, last_turn.arc, profil_step_length, last_turn.type))
+	if res.success:
+		segments.remove(last_turn)
+		segments.insert(last_turn_index, res.result)
+		print(res.result.end)
+		turn32 = calc_turn(pos, heading, res.result.arc, res.result.radius, res.result.end_radius, res.result.type, profil_steps=res.result.profil_steps, dtype=np.float32)
+		print("float32 drift: "+str(np.linalg.norm(np.array(res.result.end)-np.array(turn32.end))))
+	return segments
+		
 
+paths, attributes = svgpathtools.svg2paths('test/track_layout.svg')
 
+class TrackInfo():
+	def __init__(self, name, category, width, author):
+		self.name = name
+		self.category = category
+		self.author = author
 fig = plt.figure()
-plt.gca().invert_yaxis()
+#plt.gca().invert_yaxis()
 ax = fig.add_subplot(111)
 
 for svg_path in paths[1:2]:
@@ -469,10 +427,21 @@ for svg_path in paths[1:2]:
 	patch = patches.PathPatch(mat_path, facecolor='none', lw=1, edgecolor='red')
 	ax.add_patch(patch)
 
+start = timer()
+segments = None
 for svg_path in paths[1:2]:
-	torcs_path = fit_torcs_segments(svg_path, fig)
+	segments = fit_torcs_segments(svg_path, fig)
 	#patch = patches.PathPatch(torcs_path, facecolor='none', lw=1, edgecolor='green')
 	#ax.add_patch(patch)
+end = timer()
+print(end - start)
+
+segments = fix_closing_for_float32(segments)
+
+track_info = TrackInfo("Test1", "road", 8.0, "0x1af")
+with open('test-1.xml', 'w') as f:
+	f.write(torcs_trackxml.create_new(track_info, segments))
+
 ax.autoscale(enable=True, axis='both', tight=None)
 plt.axis('equal')
 plt.show()
